@@ -1,0 +1,9 @@
+# 忽略所有大文件
+*.h5
+*.hdf5
+statepoint.*
+summary.h5
+
+# 忽略运行产生的临时文件
+*.out
+*.log
