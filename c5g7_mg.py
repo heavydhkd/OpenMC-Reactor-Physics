@@ -79,5 +79,14 @@ source = openmc.IndependentSource()
 source.space = openmc.stats.Box((-pitch, -pitch, -10), (pitch, pitch, 10))
 settings.source = source
 settings.export_to_xml()
-
+# 设置画图（切面图）
+plot = openmc.Plot()
+plot.filename = 'c5g7_2x2_slice'
+plot.basis = 'xy'                # 沿 xy 平面剖开
+plot.origin = (0., 0., 0.)       # 切面中心点
+plot.width = (2.52, 2.52)        # 画布大小 (pitch 1.26 * 2)
+plot.pixels = (500, 500)         # 分辨率
+plot.color_by = 'material'       # 按材料上色
+plots = openmc.Plots([plot])
+plots.export_to_xml()
 print("C5G7 多群截面 2x2 模型输入卡生成完毕！")
