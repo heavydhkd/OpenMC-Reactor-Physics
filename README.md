@@ -1,11 +1,11 @@
-# ⚛️ OpenMC-Reactor-Physics: AI 代理模型与智能逆向寻优系统
+#  OpenMC-Reactor-Physics: AI 代理模型与智能逆向寻优系统
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![OpenMC](https://img.shields.io/badge/OpenMC-0.13%2B-orange)
 ![Scikit-Learn](https://img.shields.io/badge/scikit--learn-1.0%2B-yellowgreen)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
-##  项目简介
+## 项目简介
 
 在核反应堆物理计算中，高保真蒙特卡洛（Monte Carlo）程序（如 OpenMC）虽然计算精度极高，但其单次运算耗时较长，难以直接应用于需要海量样本（如几十万组）的多目标优化、敏感性分析或数字孪生中。
 
@@ -13,8 +13,8 @@
 
 ###  核心亮点
 -  **面向对象物理建模**：将复杂的物理几何、材料、参数封装为 `VeraPinCell` 类，一行代码驱动模型。
-- **高效数据生成引擎**：结合拉丁超立方采样 (LHS) 与 Python 多进程并发 (`ProcessPoolExecutor`)，10 分钟内并行生成 100 组高保真数据集。
--  **高精度代理模型**：引入高斯过程回归 (Kriging) 完美处理小样本与蒙特卡洛统计涨落噪声，测试集误差低至 **~134 pcm**，\(R^2\) 达 **0.9996**。
+-  **高效数据生成引擎**：结合拉丁超立方采样 (LHS) 与 Python 多进程并发 (`ProcessPoolExecutor`)，10 分钟内并行生成 100 组高保真数据集。
+- **高精度代理模型**：引入高斯过程回归 (Kriging) 完美处理小样本与蒙特卡洛统计涨落噪声，测试集误差低至 **~134 pcm**，$R^2$ 达 **0.9996**。
 -  **智能逆向设计**：利用 `scipy.optimize` 驱动代理模型，在毫秒级时间内完成临界状态的参数寻优，并自动调用 OpenMC 进行真实复核。
 -  **主动学习闭环**：将寻优结果自动回流至数据库更新模型，实现 AI 的自我迭代。
 
@@ -48,30 +48,27 @@ graph TD
 
 数学与算法基础
 
-1. Kriging (高斯过程回归)：
-   假设预测值服从多元正态分布，不仅输出预测均值 \mu(x)，还输出预测方差 \sigma^2(x)。其核函数 (Kernel) 采用了 RBF (径向基) 与 WhiteKernel (白噪声) 的组合：
-   
+1. Kriging (高斯过程回归)
+假设预测值服从多元正态分布，不仅输出预测均值 $\mu(x)$，还输出预测方差 $\sigma^2(x)$。其核函数 (Kernel) 采用了 RBF (径向基) 与 WhiteKernel (白噪声) 的组合：
 
 k(x, x') = \sigma_f^2 \exp\left(-\frac{(x - x')^2}{2l^2}\right) + \sigma_n^2 \delta(x, x') 
-]
-其中 \sigma_n^2 有效吸收了 OpenMC 蒙特卡洛计算的固有统计涨落。
 
-2. 智能寻优的目标函数：
-   我们要寻找一组参数 x = [Enrichment, Boron]，在固定包壳尺寸 Clad 下，使得反应性逼近临界：
-   
+其中 $\sigma_n^2$ 有效吸收了 OpenMC 蒙特卡洛计算的固有统计涨落。
+
+2. 智能寻优的目标函数
+我们要寻找一组参数 $x = [Enrichment, Boron]$，在固定包壳尺寸 $Clad$ 下，使得反应性逼近临界：
 
 \min_{x \in \mathcal{X}} \left| \hat{k}_{eff}(x, Clad) - 1.0 \right| 
-]
 
 ---
 
- 结果展示与分析
+结果展示与分析
 
 1. 代理模型性能评估
 
 我们将 100 组数据集按 8:2 划分训练集与测试集，在测试集上的表现如下：
 
-算法模型 均方根误差 (RMSE) 决定系数 (R^2) 训练耗时
+算法模型 均方根误差 (RMSE) 决定系数 ($R^2$) 训练耗时
 Kriging (高斯过程) 134.75 pcm 0.9996 < 1s
 BP 神经网络 (MLP) 16226.23 pcm -4.5676 < 1s
 
