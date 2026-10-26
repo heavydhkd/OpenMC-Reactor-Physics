@@ -1,0 +1,12 @@
+openmc_run:
+  batches: 100
+  inactive: 20
+  particles: 10000
+
+sampling:
+  n_samples: 100
+  random_state: 42
+  bounds:
+    enrichment_pct: [1.5, 5.0]
+    boron_ppm: [0.0, 1200.0]
+    clad_outer_radius: [0.45, 0.49]

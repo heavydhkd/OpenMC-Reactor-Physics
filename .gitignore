@@ -1,9 +1,13 @@
-# 忽略所有大文件
 *.h5
-*.hdf5
 statepoint.*
 summary.h5
+*.xml
 
-# 忽略运行产生的临时文件
-*.out
-*.log
+__pycache__/
+*.pyc
+.DS_Store
+
+data/raw/*
+!data/raw/.gitkeep
+results/figures/*
+!results/figures/.gitkeep
