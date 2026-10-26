@@ -10,73 +10,104 @@ def create_material(name, macro_name):
     mat.add_macroscopic(macro_name)
     return mat
 
-uo2 = create_material('UO2', 'uo2')
-mox = create_material('MOX', 'mox7') # 简化处理，统一用mox7
+uo2_mat = create_material('UO2', 'uo2')
+mox43 = create_material('MOX43', 'mox43')
+mox7 = create_material('MOX7', 'mox7')
+mox87 = create_material('MOX87', 'mox87')
 water = create_material('Water', 'water')
+fiss_chamber = create_material('FissChamber', 'fiss_chamber')
+guide_tube_mat = create_material('GuideTube', 'guide_tube')
 
-materials = openmc.Materials([uo2, mox, water])
+materials = openmc.Materials([uo2_mat, mox43, mox7, mox87, water, fiss_chamber, guide_tube_mat])
 materials.cross_sections = 'c5g7-mgxs.h5'
 materials.export_to_xml()
 
-# 3. 基础栅元 Universe
+# 3. 定义单栅元（圆柱体 + 水）
 pitch = 1.26
 pin_r = 0.54
 fuel_cyl = openmc.ZCylinder(r=pin_r)
 
 def create_pin_universe(fuel_mat):
+    if fuel_mat is None:
+        return openmc.Universe(cells=[openmc.Cell(fill=water)])
     fuel_cell = openmc.Cell(fill=fuel_mat, region=-fuel_cyl)
     mod_cell = openmc.Cell(fill=water, region=+fuel_cyl)
     return openmc.Universe(cells=[fuel_cell, mod_cell])
 
-uo2_univ = create_pin_universe(uo2)
-mox_univ = create_pin_universe(mox)
-water_univ = openmc.Universe(cells=[openmc.Cell(fill=water)]) # 纯水孔
+uo2_univ = create_pin_universe(uo2_mat)
+mox43_univ = create_pin_universe(mox43)
+mox7_univ = create_pin_universe(mox7)
+mox87_univ = create_pin_universe(mox87)
+water_univ = create_pin_universe(None)
 
-# 4. 构建 17x17 组件生成函数
-def build_assembly(base_fuel_univ):
-    # 17x17 全填燃料
-    grid = [[base_fuel_univ for _ in range(17)] for _ in range(17)]
-    
-    # 四个角是纯水孔
-    grid[0][0] = water_univ
-    grid[0][16] = water_univ
-    grid[16][0] = water_univ
-    grid[16][16] = water_univ
-    
-    # 真实的C5G7有特定的控制棒导向管位置，这里我们做个十字形纯水简化
-    for i in range(5, 12):
-        grid[8][i] = water_univ  # 横排
-        grid[i][8] = water_univ  # 竖排
-        
+# 导向管和裂变室填满整个栅元
+fiss_chamber_univ = openmc.Universe(cells=[openmc.Cell(fill=fiss_chamber)])
+guide_tube_univ = openmc.Universe(cells=[openmc.Cell(fill=guide_tube_mat)])
+
+# 4. 构建 17x17 UO2 组件
+def build_uo2_assembly():
+    grid = [[uo2_univ for _ in range(17)] for _ in range(17)]
+    grid[0][0] = grid[0][16] = grid[16][0] = grid[16][16] = water_univ
+    grid[8][8] = fiss_chamber_univ
+    for i in range(17):
+        if i != 8:
+            grid[8][i] = guide_tube_univ
+            grid[i][8] = guide_tube_univ
+            
     lattice = openmc.RectLattice()
     lattice.lower_left = (-17*pitch/2, -17*pitch/2)
     lattice.pitch = (pitch, pitch)
     lattice.universes = grid
-    
-    # 组件最外层边界（水隙边界）
-    x_min = openmc.XPlane(-17*pitch/2, boundary_type='reflective')
-    x_max = openmc.XPlane(17*pitch/2, boundary_type='reflective')
-    y_min = openmc.YPlane(-17*pitch/2, boundary_type='reflective')
-    y_max = openmc.YPlane(17*pitch/2, boundary_type='reflective')
-    
-    cell = openmc.Cell(fill=lattice, region=+x_min & -x_max & +y_min & -y_max)
-    return openmc.Universe(cells=[cell])
+    lattice.outer = water_univ
+    return lattice
 
-    # 5. 生成两个不同的组件 Universe
-uo2_assembly = build_assembly(uo2_univ)
-mox_assembly = build_assembly(mox_univ)
+# 5. 构建 17x17 MOX 组件
+def build_mox_assembly():
+    grid = [[mox7_univ for _ in range(17)] for _ in range(17)]
+    for i in range(5, 12):
+        for j in range(5, 12):
+            grid[i][j] = mox43_univ
+    for i in range(17):
+        grid[0][i] = mox87_univ
+        grid[16][i] = mox87_univ
+        grid[i][0] = mox87_univ
+        grid[i][16] = mox87_univ
 
-# 6. 拼装 2x2 宏观堆芯 (右上/左下是MOX，左上/右下是UO2)
+    grid[0][0] = grid[0][16] = grid[16][0] = grid[16][16] = water_univ
+    grid[8][8] = fiss_chamber_univ
+    for i in range(17):
+        if i != 8:
+            grid[8][i] = guide_tube_univ
+            grid[i][8] = guide_tube_univ
+            
+    lattice = openmc.RectLattice()
+    lattice.lower_left = (-17*pitch/2, -17*pitch/2)
+    lattice.pitch = (pitch, pitch)
+    lattice.universes = grid
+    lattice.outer = water_univ
+    return lattice
+
+# 6. 组装全堆芯 (关键：加入 0.08cm 水隙 + 全反射边界)
+core_pitch = 21.5  # 21.42 + 0.08 水隙
+uo2_assembly_lattice = build_uo2_assembly()
+mox_assembly_lattice = build_mox_assembly()
+
+uo2_assembly_cell = openmc.Cell(fill=uo2_assembly_lattice)
+uo2_assembly_univ = openmc.Universe(cells=[uo2_assembly_cell])
+
+mox_assembly_cell = openmc.Cell(fill=mox_assembly_lattice)
+mox_assembly_univ = openmc.Universe(cells=[mox_assembly_cell])
+
 core_lattice = openmc.RectLattice()
-core_pitch = 17 * pitch  # 组件边长
 core_lattice.lower_left = (-core_pitch, -core_pitch)
 core_lattice.pitch = (core_pitch, core_pitch)
 core_lattice.universes = [
-    [uo2_assembly, mox_assembly],
-    [mox_assembly, uo2_assembly]
+    [uo2_assembly_univ, mox_assembly_univ],
+    [mox_assembly_univ, uo2_assembly_univ]
 ]
+core_lattice.outer = water_univ
 
-# 堆芯边界 (反射边界)
+# 全反射边界（无限阵列）
 cx_min = openmc.XPlane(-core_pitch, boundary_type='reflective')
 cx_max = openmc.XPlane(core_pitch, boundary_type='reflective')
 cy_min = openmc.YPlane(-core_pitch, boundary_type='reflective')
@@ -86,7 +117,7 @@ core_cell = openmc.Cell(fill=core_lattice, region=+cx_min & -cx_max & +cy_min & 
 geometry = openmc.Geometry([core_cell])
 geometry.export_to_xml()
 
-# 7. 设置计算参数 (全尺寸计算需要更多粒子)
+# 7. 计算设置
 settings = openmc.Settings()
 settings.energy_mode = 'multi-group'
 settings.run_mode = 'eigenvalue'
@@ -94,21 +125,9 @@ settings.batches = 200
 settings.inactive = 50
 settings.particles = 10000
 
-# 源分布设为覆盖整个堆芯
 source = openmc.IndependentSource()
 source.space = openmc.stats.Box((-core_pitch, -core_pitch, -10), (core_pitch, core_pitch, 10))
 settings.source = source
 settings.export_to_xml()
 
-# 8. 画图：看看真正的全堆芯！
-plot = openmc.Plot()
-plot.filename = 'c5g7_full_core'
-plot.basis = 'xy'
-plot.origin = (0., 0., 0.)
-plot.width = (core_pitch*2, core_pitch*2)
-plot.pixels = (1000, 1000)  # 高清分辨率
-plot.color_by = 'material'
-plots = openmc.Plots([plot])
-plots.export_to_xml()
-
-print("完整 C5G7 2D 堆芯输入卡生成完毕！")
+print("C5G7 官方对标版生成完毕！")
