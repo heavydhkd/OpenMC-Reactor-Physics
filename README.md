@@ -141,11 +141,12 @@ python src/train_surrogate.py
 
 (脚本将自动完成：训练 -> 画图 -> 寻优 -> OpenMC 验证 -> 主动学习更新)
 
----
+### 4. 全局敏感性分析 (Sobol Index)
+为了定量分析各物理参数对反应性的影响权重，本项目结合 `SALib` 库与训练好的 Kriging 代理模型，进行了全局敏感性分析（一阶指数 S1 与总指数 ST）。
 
- 后续研究展望 (Roadmap)
+**
+- **Enrichment**：S1 约 0.88，是决定 \(k_{eff}\) 的绝对主导因素。
+- **Boron**：ST (0.0937) > S1 (0.0905)，表明硼浓度与其他参数存在非线性交互作用。
+- **Mod_Temp**：由于模型引入了真实的慢化剂热膨胀（密度随温度下降），成功捕捉到了负温度反馈对反应性的微弱影响（S1 约 0.007）。
 
-☐ 扩展特征维度：引入燃料芯块直径、慢化剂温度等，结合 Sobol 指数法 进行全局敏感性分析。
-☐ 引入时间演化：接入 openmc.deplete 燃耗模块，提取 1000 天内的核素演化，使用 LSTM 或 时序 Transformer 预测长周期临界安全。
-☐ 多物理场耦合：提取 heating tally，利用 KD-Tree 映射到一维热工网格，实现简单的中子-热工闭环耦合。
-☐ 底层加速：将部分 Python 批处理逻辑重写为 C++/MPI，以适配超算集群。
+![Sobol Sensitivity](results/figures/sobol_sensitivity.png)
