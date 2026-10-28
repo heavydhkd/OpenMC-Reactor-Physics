@@ -1,12 +1,14 @@
 openmc_run:
-  batches: 100
+  batches: 50      # 为了加快跑批速度，样本可以略减，批次降到 50
   inactive: 20
-  particles: 10000
+  particles: 5000
 
 sampling:
-  n_samples: 100
+  n_samples: 60    # 5 个维度，跑 60 组（加上之前的数据够用了）
   random_state: 42
   bounds:
     enrichment_pct: [1.5, 5.0]
     boron_ppm: [0.0, 1200.0]
     clad_outer_radius: [0.45, 0.49]
+    fuel_temp: [600.0, 1200.0]    # 新增
+    mod_temp: [500.0, 650.0]      # 新增

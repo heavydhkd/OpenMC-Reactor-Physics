@@ -1,0 +1,13 @@
+# 核心物理计算与数据处理
+openmc>=0.13.3
+numpy>=1.24.0
+pandas>=2.0.0
+h5py>=3.8.0
+
+# 科学计算与智能寻优
+scipy>=1.10.0
+scikit-learn>=1.2.0
+
+# 配置与可视化
+pyyaml>=6.0
+matplotlib>=3.7.0
