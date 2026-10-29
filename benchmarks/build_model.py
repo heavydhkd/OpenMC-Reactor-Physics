@@ -12,7 +12,16 @@ water.add_element('O', 1)
 water.set_density('g/cm3', 0.74)
 water.add_s_alpha_beta('c_H_in_H2O')
 
-mats = openmc.Materials([fuel, water])
+# 包壳材料：Zircaloy（Zr + 少量 Sn/Fe/Cr/O）
+clad = openmc.Material(name='Zircaloy')
+clad.add_element('Zr', 0.9828)
+clad.add_element('Sn', 0.013)
+clad.add_element('Fe', 0.002)
+clad.add_element('Cr', 0.001)
+clad.add_element('O', 0.0012)
+clad.set_density('g/cm3', 6.56)
+
+mats = openmc.Materials([fuel, clad, water])
 mats.export_to_xml()
 
 # 2. 定义几何（燃料芯块、包壳、水）
@@ -20,7 +29,7 @@ fuel_cyl = openmc.ZCylinder(r=0.41)
 clad_cyl = openmc.ZCylinder(r=0.475)
 
 fuel_cell = openmc.Cell(name='Fuel', fill=fuel, region=-fuel_cyl)
-clad_cell = openmc.Cell(name='Clad', fill=water, region=+fuel_cyl & -clad_cyl)
+clad_cell = openmc.Cell(name='Clad', fill=clad, region=+fuel_cyl & -clad_cyl)
 mod_cell = openmc.Cell(name='Moderator', fill=water, region=+clad_cyl)
 
 x_min = openmc.XPlane(-0.63, boundary_type='reflective')

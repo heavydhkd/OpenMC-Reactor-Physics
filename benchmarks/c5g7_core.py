@@ -130,4 +130,18 @@ source.space = openmc.stats.Box((-core_pitch, -core_pitch, -10), (core_pitch, co
 settings.source = source
 settings.export_to_xml()
 
+# 8. 堆芯中平面切片图（openmc.run() 时生成 c5g7_full_core.png）
+plot = openmc.Plot()
+plot.filename = 'c5g7_full_core'
+plot.basis = 'xy'                # 沿 xy 平面剖开
+plot.origin = (0., 0., 0.)       # 经过堆芯中平面
+plot.width = (43., 43.)          # 覆盖 2x2 组件堆芯（core_pitch 21.5 * 2）
+plot.pixels = (400, 400)         # 分辨率
+plot.color_by = 'material'       # 按材料上色
+plots = openmc.Plots([plot])
+plots.export_to_xml()
+
 print("C5G7 官方对标版生成完毕！")
+
+if __name__ == '__main__':
+    openmc.run()

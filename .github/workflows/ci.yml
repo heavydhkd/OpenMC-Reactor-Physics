@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装依赖（不含 OpenMC）
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/requirements-dev.txt
+
+      - name: 运行单元测试
+        run: python -m pytest -q
+
+      - name: 物理与配置自检
+        run: python -m src.validate --check
+
+      - name: 准备旧数据集以便跑代理模型链路
+        run: |
+          test -f data/processed/vera_p1_dataset.csv && echo "数据集存在"
+          python -m src.train_surrogate --no-plot --cv 0
+          python -m src.optimize --save
+
+      - name: 代码风格
+        run: python -m ruff check src tests web_app.py --output-format=github
+        continue-on-error: true

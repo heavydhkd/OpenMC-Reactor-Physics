@@ -1,0 +1,5 @@
+# 开发/测试依赖（不含 OpenMC）
+-r requirements.txt
+pytest>=7.4.0
+pytest-cov>=4.1.0
+ruff>=0.4.0

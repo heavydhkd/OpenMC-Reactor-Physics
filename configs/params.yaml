@@ -1,14 +1,121 @@
-openmc_run:
-  batches: 50      # 为了加快跑批速度，样本可以略减，批次降到 50
-  inactive: 20
-  particles: 5000
+# =============================================================================
+# OpenMC-Reactor-Physics 统一配置
+# 所有脚本（run_batch / train_surrogate / sensitivity_analysis / web_app /
+# coupled_pin / validate）都从这里读取参数，不再各自硬编码。
+# =============================================================================
 
+meta:
+  name: "VERA P1 pin cell (PWR, UO2 / Zircaloy-4 / borated water)"
+  physics_version: "2.0"   # 与 src/physics.py:PHYSICS_VERSION 保持一致
+
+# -----------------------------------------------------------------------------
+# 几何与材料（cm, g/cm3, K）
+# -----------------------------------------------------------------------------
+physics:
+  pellet_radius_cm: 0.4096          # 芯块半径（VERA P1：芯块直径 0.8192 cm）
+  clad_inner_radius_cm: 0.4180      # 包壳内半径 —— 与芯块之间是 84 μm 气隙
+  clad_outer_radius_cm: 0.4750      # 包壳外半径（厚度 0.057 cm）
+  pitch_cm: 1.26                    # 方形栅距
+  fuel_density_g_cm3: 10.257
+  clad_density_g_cm3: 6.56
+  gap_density_g_cm3: 8.13e-5        # 1 atm He @ 600 K
+  coolant_density:
+    # iapws_table：15.5 MPa 下随温度变化的物理密度（参数化研究用）
+    # constant   ：基准题规定的 0.743 g/cm³（复现参考态用）
+    model: iapws_table
+    value: 0.743
+  zircaloy_wt_pct:                  # Zircaloy-4 合金元素，Zr 取余量
+    Sn: 1.45
+    Fe: 0.21
+    Cr: 0.10
+    O: 0.125
+
+# -----------------------------------------------------------------------------
+# OpenMC 运行控制
+# -----------------------------------------------------------------------------
+openmc_run:
+  batches: 100
+  inactive: 20
+  particles: 10000
+  seed: 20260101        # 每个算例的实际种子 = seed + case_id，保证可复现
+  threads_per_case: 1   # 单算例线程数；进程数由 CPU 核数 // 该值决定
+
+# -----------------------------------------------------------------------------
+# 拉丁超立方采样：代理模型的训练数据
+# -----------------------------------------------------------------------------
 sampling:
-  n_samples: 60    # 5 个维度，跑 60 组（加上之前的数据够用了）
+  n_samples: 60
   random_state: 42
+  # 注意 clad_r 的下限：包壳内半径 = clad_r - 0.057 必须大于芯块半径 0.4096 且
+  # 至少留 10 μm 气隙，因此 clad_r >= 0.4676 cm（见 src/physics.validate_pin_geometry）
+  # 注意 mod_temp 的上限：15.5 MPa 下饱和温度 617.94 K（src/physics.saturation_temperature）
   bounds:
-    enrichment_pct: [1.5, 5.0]
-    boron_ppm: [0.0, 1200.0]
-    clad_outer_radius: [0.45, 0.49]
-    fuel_temp: [600.0, 1200.0]    # 新增
-    mod_temp: [500.0, 650.0]      # 新增
+    enrichment: [1.5, 5.0]          # wt% U-235
+    boron_ppm:  [0.0, 2500.0]       # 冷却剂硼浓度（质量 ppm）
+    clad_r:     [0.468, 0.490]      # 包壳外半径，cm
+    fuel_temp:  [600.0, 1200.0]     # K
+    mod_temp:   [500.0, 615.0]      # K，低于饱和温度
+
+# -----------------------------------------------------------------------------
+# 代理模型
+# -----------------------------------------------------------------------------
+training:
+  features: [enrichment, boron_ppm, clad_r, fuel_temp, mod_temp]
+  test_size: 0.2
+  random_state: 42
+  kernel: matern                   # matern | rbf | dot_rbf
+  n_restarts_optimizer: 10
+  # WhiteKernel 的噪声方差不做自由拟合：OpenMC 的 1σ ≈ 1e-3，方差 ≈ 1e-6，
+  # 把它限制在这个量级附近，避免 GP 用"大噪声"掩盖模型结构误差。
+  noise_level: 1.0e-6
+  noise_level_bounds: [1.0e-9, 1.0e-4]
+
+# -----------------------------------------------------------------------------
+# 逆向寻优（固定包壳尺寸与温度，求临界富集度/硼浓度）
+# -----------------------------------------------------------------------------
+optimization:
+  target_k: 1.0
+  pcm_scale: 100000.0              # 目标函数用 pcm 量纲，否则 SLSQP 的数值梯度会被浮点吃掉
+  method: differential_evolution   # differential_evolution | slsqp
+  design_vars: [enrichment, boron_ppm]
+  fixed:
+    clad_r: 0.475
+    fuel_temp: 900.0
+    mod_temp: 600.0
+  bounds:
+    enrichment: [1.5, 5.0]
+    boron_ppm:  [0.0, 2500.0]
+
+# -----------------------------------------------------------------------------
+# Sobol 全局敏感性分析
+# -----------------------------------------------------------------------------
+sensitivity:
+  n_samples: 4096                  # 基础样本数 N，二次抽样后总评估数 = N*(2D+2)
+  calc_second_order: false
+  random_state: 42
+
+# -----------------------------------------------------------------------------
+# 一维热工-中子学耦合（coupled_pin.py）
+# -----------------------------------------------------------------------------
+thermal:
+  linear_power_w_cm: 200.0         # 目标线功率密度
+  gap_conductance_w_cm2k: 0.7      # 气隙换热系数（BOL，He 气隙）
+  film_coefficient_w_cm2k: 3.0     # 包壳外表面-冷却剂对流换热系数
+  relaxation: 0.5                  # 松弛因子
+  tolerance_k: 0.01                # 收敛判据（中心温度变化）
+  max_iterations: 30
+
+# -----------------------------------------------------------------------------
+# 与基准题参考解对照（需要 OpenMC 才能实际跑）
+# -----------------------------------------------------------------------------
+validation:
+  reference_case:
+    enrichment: 3.1
+    boron_ppm: 1300.0
+    clad_r: 0.475
+    fuel_temp: 900.0
+    mod_temp: 600.0
+    coolant_density_model: constant   # 基准题规定 0.743 g/cm³
+  # 文献报道值（VERA P1, 连续能量 ENDF/B-VII 系列）。仅作对照，
+  # 若你有官方答案文件，请替换该数值。
+  reference_k_inf: 1.1756

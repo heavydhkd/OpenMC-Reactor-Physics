@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "如果本仓库的模型或数据对你的工作有帮助，请引用。"
+title: "OpenMC-Reactor-Physics: PWR 单栅元中子学-热工耦合与代理模型"
+abstract: >
+  基于 OpenMC 蒙特卡罗输运的压水堆单栅元模型，包含物理修正（芯块-包壳气隙、
+  Zircaloy-4 质量分数、硼浓度质量比、IAPWS 冷却剂密度）、高斯过程代理模型、
+  Sobol 全局敏感性分析、临界设计寻优与一维热工-中子学耦合。
+version: 2.0.0
+date-released: 2024-12-01
+license: MIT
+type: software
+repository-code: "https://github.com/heavydhkd/OpenMC-Reactor-Physics"
+keywords:
+  - OpenMC
+  - Monte Carlo
+  - PWR
+  - surrogate model
+  - Gaussian process
+  - Sobol sensitivity

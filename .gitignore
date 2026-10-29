@@ -1,13 +1,40 @@
+# OpenMC / 输运计算产物
 *.h5
 statepoint.*
 summary.h5
+tallies.out
 *.xml
+*.h5.bak
 
-__pycache__/
-*.pyc
-.DS_Store
-
+# 数据
 data/raw/*
 !data/raw/.gitkeep
-results/figures/*
-!results/figures/.gitkeep
+data/processed/*.jsonl
+!data/processed/vera_p1_dataset.csv
+results/*
+!results/.gitkeep
+
+# 生成物
+results/*
+!results/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 工具与编辑器
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/

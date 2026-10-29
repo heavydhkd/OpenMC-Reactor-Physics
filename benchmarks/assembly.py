@@ -11,7 +11,17 @@ water.add_element('H', 2)
 water.add_element('O', 1)
 water.set_density('g/cm3', 0.74)
 water.add_s_alpha_beta('c_H_in_H2O')
-mats = openmc.Materials([fuel, water])
+
+# 包壳材料：Zircaloy（Zr + 少量 Sn/Fe/Cr/O）
+clad = openmc.Material(name='Zircaloy')
+clad.add_element('Zr', 0.9828)
+clad.add_element('Sn', 0.013)
+clad.add_element('Fe', 0.002)
+clad.add_element('Cr', 0.001)
+clad.add_element('O', 0.0012)
+clad.set_density('g/cm3', 6.56)
+
+mats = openmc.Materials([fuel, clad, water])
 mats.export_to_xml()
 
 # 2. 几何尺寸参数
@@ -22,7 +32,7 @@ clad_r = 0.475
 fuel_cyl = openmc.ZCylinder(r=pin_r)
 clad_cyl = openmc.ZCylinder(r=clad_r)
 fuel_cell = openmc.Cell(fill=fuel, region=-fuel_cyl)
-clad_cell = openmc.Cell(fill=water, region=+fuel_cyl & -clad_cyl)
+clad_cell = openmc.Cell(fill=clad, region=+fuel_cyl & -clad_cyl)
 mod_cell = openmc.Cell(fill=water, region=+clad_cyl)
 
 x_min = openmc.XPlane(-pitch/2, boundary_type='reflective')
