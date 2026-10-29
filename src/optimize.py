@@ -208,9 +208,11 @@ def _print_report(report: Mapping[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="用代理模型求临界富集度/硼浓度")
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--model", type=Path, default=None, help="模型文件，缺省用 results/model.joblib")
+    parser.add_argument("--model", type=Path, default=None,
+                        help="模型文件，缺省用 results/surrogate.joblib")
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--save", type=Path, default=None, help="结果 JSON 路径")
+    parser.add_argument("--save", type=Path, nargs="?", const=PATHS.results_dir / "optimization.json",
+                        default=None, help="结果 JSON 路径（省略路径时写到 results/optimization.json）")
     return parser
 
 

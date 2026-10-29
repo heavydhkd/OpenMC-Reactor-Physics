@@ -103,7 +103,7 @@ python -m src.validate --check
 ```bash
 python -m src.train_surrogate           # 训练 + 出图 → results/
 python -m src.sensitivity_analysis      # Sobol 指数   → results/sensitivity.json
-python -m src.optimize --save           # 临界设计寻优 → results/optimization.json
+python -m src.optimize --save results/optimization.json   # 临界设计寻优
 python -m src.coupled_pin               # 一维热工耦合 → results/coupled_pin.json
 streamlit run web_app.py                # 交互界面（需 pip install streamlit）
 ```
@@ -285,9 +285,9 @@ python -m src.train_surrogate --cv 5
 # ③ 敏感性
 python -m src.sensitivity_analysis
 
-# ④ 寻优（--verify 需要 OpenMC）
-python -m src.optimize --save
-python -m src.validate --design results/optimization.json
+# ④ 寻优（结果写入 results/optimization.json）
+python -m src.optimize --save results/optimization.json
+python -m src.validate --design results/optimization.json   # 需 OpenMC 复核
 
 # ⑤ 热工耦合
 python -m src.coupled_pin --power 200 --mod-temp 600

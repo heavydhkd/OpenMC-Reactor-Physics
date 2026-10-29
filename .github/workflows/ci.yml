@@ -38,7 +38,7 @@ jobs:
         run: |
           test -f data/processed/vera_p1_dataset.csv && echo "数据集存在"
           python -m src.train_surrogate --no-plot --cv 0
-          python -m src.optimize --save
+          python -m src.optimize --save results/optimization.json
 
       - name: 代码风格
         run: python -m ruff check src tests web_app.py --output-format=github
