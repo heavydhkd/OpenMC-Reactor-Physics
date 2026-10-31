@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
-
+import time
 # ==========================================
 # 1. 模拟 AI 代理模型（后台运行，不可见）
 # ==========================================
@@ -91,3 +91,36 @@ if st.sidebar.button("🚀 开始预测"):
     ax.grid(True, alpha=0.3)
     ax.legend()
     st.pyplot(fig)
+    import time
+
+st.markdown("---")
+st.subheader("🔄 物理-热工耦合迭代动态演示")
+
+if st.button("启动耦合迭代演示"):
+    # 模拟你的 coupled_pin.py 中的逻辑
+    T_current = 600.0
+    relax = 0.5
+    history_T = []
+    history_k = []
+    
+    chart_placeholder = st.empty() # 用于动态刷新图表
+    
+    for i in range(1, 10):
+        # 模拟物理计算（这里用假公式代替，避免网页卡死）
+        power_density = 1.0e8 / (1 + (T_current - 600) * 0.0005) 
+        T_new_calc = 600.0 + power_density * 3.0e-6
+        
+        # 松弛迭代
+        T_next = T_current + relax * (T_new_calc - T_current)
+        
+        # 记录历史
+        history_T.append(T_next)
+        
+        # 动态画图
+        chart_placeholder.line_chart(history_T)
+        
+        time.sleep(0.5) # 制造停顿感，让导师看清过程
+        if abs(T_next - T_current) < 1.0:
+            st.success(f"迭代收敛！最终燃料温度为: {T_next:.2f} K")
+            break
+        T_current = T_next
