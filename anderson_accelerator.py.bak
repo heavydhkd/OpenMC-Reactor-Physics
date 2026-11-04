@@ -1,0 +1,515 @@
+"""安德森加速（Anderson Acceleration, AA）—— 给 Picard 不动点迭代装上「涡轮」。
+
+本模块只依赖 Python 标准库与 NumPy，不包含任何 Windows 专有调用，
+因此可以直接在 WSL / Linux 的 Python 环境里运行。
+
+====================================================================
+一、它解决什么问题
+====================================================================
+很多耦合迭代最终都可以写成同一个形式：
+
+    x_{k+1} = G(x_k)          （Picard 迭代 / 不动点迭代）
+
+例如反应堆热工耦合里，先由功率分布算出温度场，再由温度更新截面，
+然后又得到新的功率分布。若映射 G 的谱半径接近 1，Picard 每步只能把
+误差缩小一点点，收敛极慢，看起来像「卡住不动」。
+
+Anderson 加速不去改变物理模型 G，只改变「拿到 f_k = G(x_k) 之后
+如何迈出下一步」。它把最近若干步的输出做一次带约束的线性组合：
+
+    x_{k+1} = Σ_{i=0}^{m} α_i · f_{k-m+i},   且   Σ_{i=0}^{m} α_i = 1
+
+直观上：最近 m+1 个输出张成一个仿射子空间，我们在里面挑一个
+「最像不动点」的点，而不是老老实实只接受最新的 f_k。
+
+====================================================================
+二、为什么不能直接对 f 做最小二乘
+====================================================================
+一个常见的错误写法是：直接最小化 ‖Σ α_i f_i‖，希望组合结果尽量小。
+但不动点 x* 通常不是 0！当 x* ≠ 0 时，这个目标会把迭代往原点拖，
+得到的是有偏的结果，而不是 x*。
+
+正确做法是使用**不动点残差**：
+
+    r_i = f_i - x_i = G(x_i) - x_i
+
+显然 r_i = 0 当且仅当 x_i 是不动点。残差对 x* 的具体数值不敏感，
+只关心「离不动点还有多远」，所以用它构造最小二乘是无偏的。
+
+残差型 Anderson 加速与量子化学中的 Pulay 混合（DIIS）在数学上同源，
+本文公式与 alpaqa 的 AndersonAccelerator 实现一致：
+https://kul-optec.github.io/alpaqa/0.0.1/Doxygen/anderson-helpers_8hpp_source.html
+
+====================================================================
+三、残差矩阵是怎么构造的
+====================================================================
+设当前已经保存了 m+1 个历史点（从旧到新）：
+
+    (x_0, f_0), (x_1, f_1), ..., (x_m, f_m)        （局部编号，m 即记忆深度）
+
+对应残差 r_0, ..., r_m。记相邻残差的差分为：
+
+    Δr_j = r_{j+1} - r_j,   j = 0, 1, ..., m-1
+
+把它们按列排成矩阵：
+
+    R = [ Δr_0 | Δr_1 | ... | Δr_{m-1} ]       形状 (n, m)
+
+其中 n 是未知量维数（温度场可以是标量，也可以是上万个网格点）。
+R 的每一列描述「残差在相邻两步之间变化了多少」。
+
+接着求最小二乘问题：
+
+    γ = argmin_γ ‖ R γ - r_m ‖_2
+
+也就是：用历史残差的变化量做线性组合，去尽量逼近当前残差 r_m。
+等价地，它寻找一组权重，使得「组合点的残差」尽量接近 0。
+
+====================================================================
+四、从 γ 还原仿射组合权重 α
+====================================================================
+最小二乘只给出 γ，还需要把它翻译成对 f_i 的权重 α_i。令累积和：
+
+    α_0     = γ_0
+    α_j     = γ_j - γ_{j-1}          (1 ≤ j ≤ m-1)
+    α_m     = 1 - γ_{m-1}
+
+这组 α 自动满足 Σ α_i = 1（望远镜求和），因此组合是仿射组合，
+不会把解整体缩放。最终：
+
+    x_{k+1} = Σ_{i=0}^{m} α_i · f_i
+
+可以证明它等价于：
+
+    x_{k+1} = f_m - Σ_{j=0}^{m-1} γ_j · Δf_j,   Δf_j = f_{j+1} - f_j
+
+两种写法在实数运算下完全等价；本实现采用前者，因为只需要保存 f，
+而且 α 的物理意义（对最近 m+1 个输出的权重）更直观。
+
+====================================================================
+五、为什么历史不足时退回 Picard
+====================================================================
+要构造 m 列差分，至少需要 m+1 个历史点。因此：
+
+    · 第 1 次到第 m 次调用：历史点数为 1..m，差分不足 m 列，
+      直接返回 f_k，等价于普通 Picard 迭代；
+    · 第 m+1 次调用起：历史点数为 m+1，差分恰好 m 列，开始加速。
+
+这样实现既满足「历史不足 m 步就用 Picard」的要求，也保证残差矩阵
+始终是满列数的 m 列，不会出现空矩阵或列数忽多忽少的问题。
+
+====================================================================
+六、数值细节
+====================================================================
+1. 用 np.linalg.lstsq 而不是显式解正规方程 R^T R γ = R^T r_m。
+   正规方程会把条件数平方，残差差分又往往接近线性相关，容易放大误差；
+   lstsq 内部走 SVD/QR，数值上更稳健。
+2. 当 R 列不满秩（例如一维问题、或迭代已接近收敛）时，最小二乘有
+   无穷多解，lstsq 返回其中**范数最小**的那个解。这是标准做法，
+   可以避免 γ 爆炸。
+3. 若组合结果出现 NaN/Inf，本实现回退为普通 Picard，保证调用方
+   不会因为一次数值意外而中断整个耦合迭代。
+4. m 不是越大越好：m 太大时残差列之间高度相关，问题变得病态；
+   实际工程中 m 取 3~10 通常足够。本类默认 m=3。
+
+====================================================================
+七、最小使用示例
+====================================================================
+    from anderson_accelerator import AndersonAccelerator
+
+    acc = AndersonAccelerator(m=3)
+    x = x0
+    for it in range(1, 61):
+        f = G(x)                       # 你自己的物理模型 / 耦合步
+        x_next = acc.accelerate(x, f)  # 前 3 次等价 Picard，之后加速
+        if abs(x_next - x) < 1e-8:
+            break
+        x = x_next
+
+注意：Anderson 加速不是「绝对安全」的。若 G 本身不收缩，或迭代已经
+跑飞，AA 也可能放大误差。工程上通常还会配合松弛因子、残差监控或
+「加速后残差若变大就退回 Picard」的保护逻辑；这些属于调用方的策略，
+本类只负责给出数学上标准的 AA 更新值。
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Any
+
+import numpy as np
+
+__all__ = ["AndersonAccelerator"]
+
+
+def _as_vector(value: Any, name: str) -> tuple[np.ndarray, tuple[int, ...]]:
+    """把标量 / 列表 / 任意形状的 ndarray 统一转成 1 维 float64 向量。
+
+    Parameters
+    ----------
+    value : Any
+        待转换的数值。标量、list、tuple、ndarray 都可以。
+    name : str
+        变量名，仅用于报错信息，方便定位是 x_k 还是 f_k 出了问题。
+
+    Returns
+    -------
+    vec : np.ndarray
+        形状为 (n,) 的连续 float64 向量。
+    shape : tuple[int, ...]
+        原始形状。返回结果时会按它还原，保证「输入什么形状、输出什么形状」。
+    """
+    try:
+        arr = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:  # 例如传入了字符串或复数
+        raise TypeError(f"{name} 无法转换为 float64 数值数组：{exc}") from exc
+
+    shape = arr.shape
+    vec = arr.reshape(-1)
+
+    # 提前拦截 NaN/Inf：否则它们会污染历史队列，后面所有最小二乘都失效。
+    if not np.all(np.isfinite(vec)):
+        raise ValueError(f"{name} 含有 NaN 或 Inf，无法进行 Anderson 加速")
+
+    return vec, shape
+
+
+def _restore(vec: np.ndarray, shape: tuple[int, ...]) -> float | np.ndarray:
+    """把 1 维结果还原成调用方最初传入的形状。
+
+    标量输入返回 Python float（而不是形状为 (1,) 的数组），
+    这样 `T = acc.accelerate(T, T_new)` 之后仍然可以正常做标量运算。
+    """
+    if shape == ():
+        return float(vec[0])
+    return vec.reshape(shape)
+
+
+class AndersonAccelerator:
+    """残差型 Anderson 加速器（residual-based Anderson Acceleration）。
+
+    Parameters
+    ----------
+    m : int, default 3
+        历史记忆深度，必须是正整数。
+        它表示最多使用 m 列「残差差分」；由于构造差分需要相邻两个点，
+        实际会保存最近 m+1 个 (x, f) 对。
+
+    Attributes
+    ----------
+    m : int
+        记忆深度。
+    n_calls : int
+        调用 accelerate 的总次数（包含退回 Picard 的次数）。
+    n_accelerated : int
+        真正执行了 Anderson 加速的次数。
+    last_gamma : np.ndarray | None
+        最近一次最小二乘解 γ，调试/教学时可查看。
+    last_alpha : np.ndarray | None
+        最近一次由 γ 还原出的仿射权重 α（长度为 m+1，和为 1）。
+    history_length : int
+        当前历史队列中的点数（最多 m+1）。
+
+    Notes
+    -----
+    · 第 1..m 次调用返回 f_k（普通 Picard）；
+    · 第 m+1 次调用开始返回加速值；
+    · 支持标量、1 维向量以及任意形状数组（内部展平，输出还原形状）；
+    · 每次调用都会把 (x_k, f_k) 写入历史，因此同一个实例只能用于
+      一条连续的迭代轨迹；换问题或重新开始迭代时请调用 reset()。
+
+    Examples
+    --------
+    >>> acc = AndersonAccelerator(m=3)
+    >>> x = 0.0
+    >>> for _ in range(10):
+    ...     f = 0.5 * x + 1.0
+    ...     x = acc.accelerate(x, f)
+    >>> round(x, 12)
+    2.0
+    """
+
+    def __init__(self, m: int = 3) -> None:
+        # bool 是 int 的子类，需要单独排除，避免把 True 当成 m=1。
+        if isinstance(m, bool) or not isinstance(m, (int, np.integer)):
+            raise TypeError(f"m 必须是正整数，收到的是 {type(m).__name__}: {m!r}")
+        m_int = int(m)
+        if m_int < 1:
+            raise ValueError(f"m 必须 ≥ 1，收到的是 {m_int}")
+
+        self.m: int = m_int
+
+        # 保存最近 m+1 个 (x, f)。用 deque(maxlen=...) 自动丢弃最旧的点，
+        # 不需要手动 pop(0)，也避免列表无限增长。
+        self._x_hist: deque[np.ndarray] = deque(maxlen=m_int + 1)
+        self._f_hist: deque[np.ndarray] = deque(maxlen=m_int + 1)
+
+        # 未知量维数。第一次调用时确定，之后必须保持一致。
+        self._dim: int | None = None
+
+        self.n_calls: int = 0
+        self.n_accelerated: int = 0
+        self.last_gamma: np.ndarray | None = None
+        self.last_alpha: np.ndarray | None = None
+
+    # ------------------------------------------------------------------
+    # 只读属性
+    # ------------------------------------------------------------------
+    @property
+    def history_length(self) -> int:
+        """当前历史队列中的点数（最多 m+1）。"""
+        return len(self._x_hist)
+
+    # ------------------------------------------------------------------
+    # 核心方法
+    # ------------------------------------------------------------------
+    def accelerate(self, x_k: Any, f_k: Any) -> float | np.ndarray:
+        """输入第 k 步的 x_k 与 f_k = G(x_k)，返回下一步迭代值 x_{k+1}。
+
+        Parameters
+        ----------
+        x_k : float | np.ndarray
+            当前迭代的输入（例如当前温度、当前功率分布）。
+        f_k : float | np.ndarray
+            对 x_k 作用一次不动点映射后的输出，即 G(x_k)。
+            形状必须与 x_k 完全一致。
+
+        Returns
+        -------
+        float | np.ndarray
+            下一步的迭代值。历史不足时就是 f_k 本身（Picard）；
+            历史充足时是 Anderson 加速后的仿射组合结果。
+            返回类型与输入形状一致：标量进、标量出。
+        """
+        # ==================================================================
+        # 第 0 步：统一形状并做基本校验
+        # ==================================================================
+        # 内部一律按 1 维 float64 向量计算，这样标量、一维温度场、
+        # 多维网格都可以复用同一套矩阵运算；原始形状留给 _restore 还原。
+        x_vec, x_shape = _as_vector(x_k, "x_k")
+        f_vec, f_shape = _as_vector(f_k, "f_k")
+
+        if x_vec.shape != f_vec.shape:
+            raise ValueError(
+                "x_k 与 f_k 的形状必须一致："
+                f"x_k.shape={x_shape}，f_k.shape={f_shape}"
+            )
+
+        if self._dim is None:
+            self._dim = x_vec.size
+        elif x_vec.size != self._dim:
+            raise ValueError(
+                "同一条迭代轨迹中未知量维数不能改变："
+                f"首次为 {self._dim}，本次为 {x_vec.size}。"
+                "如果换了问题，请先调用 reset()。"
+            )
+
+        # ==================================================================
+        # 第 1 步：把当前点压入历史队列
+        # ==================================================================
+        # 保存副本而不是引用：调用方可能在下一轮原地修改自己的数组，
+        # 若历史里存的是同一个缓冲区，旧数据会被悄悄改掉。
+        self._x_hist.append(x_vec.copy())
+        self._f_hist.append(f_vec.copy())
+        self.n_calls += 1
+
+        # ==================================================================
+        # 第 2 步：历史不足 m 步 → 退化为普通 Picard
+        # ==================================================================
+        # 要构造 m 列差分，需要 m+1 个历史点。当前点数 < m+1 时，
+        # 差分列数不足，直接返回 f_k，行为与 Picard 完全一致。
+        if len(self._x_hist) < self.m + 1:
+            return f_k
+
+        # 走到这里说明恰好有 m+1 个点（deque 的 maxlen 保证不会更多）。
+        # 局部编号：0 最旧，m 最新（m 就是当前这一步）。
+        x_hist = list(self._x_hist)
+        f_hist = list(self._f_hist)
+
+        # ==================================================================
+        # 第 3 步：构造残差矩阵 R（形状 n × m）
+        # ==================================================================
+        # 先算每个历史点的不动点残差 r_i = f_i - x_i。
+        # 注意：残差为 0 等价于该点已经是不动点，这正是我们要最小化的量。
+        r_hist = [f - x for x, f in zip(x_hist, f_hist)]
+
+        # 再算相邻残差的差分 Δr_j = r_{j+1} - r_j，并按列拼成矩阵。
+        # R 的第 j 列 = 第 j 个残差差分（一个 n 维向量）。
+        # np.column_stack 会把 m 个长度为 n 的向量拼成 (n, m) 矩阵；
+        # m=1 时得到 (n, 1)，n=1 时得到 (1, m)，两种情况都合法。
+        delta_r = [r_hist[j + 1] - r_hist[j] for j in range(self.m)]
+        R = np.column_stack(delta_r)
+
+        # ==================================================================
+        # 第 4 步：最小二乘求解 γ
+        # ==================================================================
+        # 目标：min_γ ‖ R γ - r_m ‖_2
+        #   · R 的每一列是「残差变化方向」；
+        #   · 我们想用这些历史变化方向线性组合出当前残差 r_m；
+        #   · 组合系数 γ 就是最小二乘解。
+        #
+        # np.linalg.lstsq 内部使用 SVD（或 QR）分解，而不是显式求逆：
+        #   - 不要求 R 是方阵，也不要求列满秩；
+        #   - 秩亏时自动返回最小范数解（min-norm solution）；
+        #   - rcond=None 表示用机器精度量级的奇异值截断阈值。
+        # 返回值是一个四元组 (solution, residuals, rank, singular_values)，
+        # 这里只关心第一个元素 solution，也就是 γ。
+        gamma = np.linalg.lstsq(R, r_hist[-1], rcond=None)[0]
+
+        # ==================================================================
+        # 第 5 步：把 γ 还原成仿射权重 α
+        # ==================================================================
+        # 由第三节的推导：
+        #   α_0 = γ_0
+        #   α_j = γ_j - γ_{j-1}      (1 ≤ j ≤ m-1)
+        #   α_m = 1 - γ_{m-1}
+        # 这样定义的 α 满足 Σ α_i = 1，保证组合是仿射组合（不会整体缩放）。
+        alpha = np.empty(self.m + 1, dtype=np.float64)
+        alpha[0] = gamma[0]
+
+        # m=1 时没有中间项，这个切片为空，赋值自然跳过。
+        if self.m > 1:
+            alpha[1:self.m] = gamma[1:] - gamma[:-1]
+
+        alpha[self.m] = 1.0 - gamma[-1]
+
+        # ==================================================================
+        # 第 6 步：对历史输出 f_i 做仿射组合
+        # ==================================================================
+        # x_{k+1} = Σ α_i f_i
+        # 这里用逐项累加而不是 np.dot，是为了让「权重 × 历史输出」的
+        # 含义在代码层面一目了然，也避免为很小的 m 额外构造大矩阵。
+        x_new = np.zeros(self._dim, dtype=np.float64)
+        for weight, f_old in zip(alpha, f_hist):
+            x_new += weight * f_old
+
+        # ==================================================================
+        # 第 7 步：数值保护与形状还原
+        # ==================================================================
+        # 理论上 γ 和 α 都是有限数；但极端病态时仍可能出现 NaN/Inf。
+        # 一旦出现，宁可退回 Picard，也不要把坏值传回物理模型。
+        if not np.all(np.isfinite(x_new)):
+            self.last_gamma = gamma
+            self.last_alpha = alpha
+            return f_k
+
+        self.n_accelerated += 1
+        self.last_gamma = gamma
+        self.last_alpha = alpha
+
+        # 标量输入 → Python float；数组输入 → 原始形状的 ndarray。
+        return _restore(x_new, x_shape)
+
+    # ------------------------------------------------------------------
+    # 辅助方法
+    # ------------------------------------------------------------------
+    def reset(self) -> None:
+        """清空历史并重置计数器，以便复用于一条新的迭代轨迹。"""
+        self._x_hist.clear()
+        self._f_hist.clear()
+        self._dim = None
+        self.n_calls = 0
+        self.n_accelerated = 0
+        self.last_gamma = None
+        self.last_alpha = None
+
+    def __repr__(self) -> str:
+        return (
+            f"AndersonAccelerator(m={self.m}, "
+            f"calls={self.n_calls}, accelerated={self.n_accelerated}, "
+            f"history={len(self._x_hist)}/{self.m + 1})"
+        )
+
+
+# ======================================================================
+# 自检 demo：直接运行 `python anderson_accelerator.py` 即可看到效果
+# ======================================================================
+def _demo() -> None:
+    """用两个简单算例验证加速器：标量 cos 不动点 + 二维线性系统。"""
+    print("=" * 70)
+    print("AndersonAccelerator 自检")
+    print("=" * 70)
+
+    # ------------------------------------------------------------------
+    # 算例 1：标量不动点 cos(x) = x，真解约 0.7390851332151607
+    # ------------------------------------------------------------------
+    x_star = 0.7390851332151607
+    tol = 1e-12
+    max_iter = 500
+
+    def g_cos(x: float) -> float:
+        return float(np.cos(x))
+
+    def picard_scalar(g, x0: float, tol: float, max_iter: int):
+        x = x0
+        for k in range(1, max_iter + 1):
+            f = g(x)
+            if abs(f - x) < tol:
+                return k, x
+            x = f
+        return max_iter, x
+
+    def aa_scalar(g, x0: float, m: int, tol: float, max_iter: int):
+        acc = AndersonAccelerator(m)
+        x = x0
+        for k in range(1, max_iter + 1):
+            f = g(x)
+            if abs(f - x) < tol:
+                return k, x, acc
+            x = acc.accelerate(x, f)
+        return max_iter, x, acc
+
+    k_p, x_p = picard_scalar(g_cos, 1.0, tol, max_iter)
+    k_a, x_a, acc = aa_scalar(g_cos, 1.0, 3, tol, max_iter)
+
+    print(f"\n[算例 1] cos(x) = x，x* = {x_star:.15f}")
+    print(f"  Picard        : {k_p:3d} 次迭代，误差 {abs(x_p - x_star):.3e}")
+    print(f"  Anderson(m=3) : {k_a:3d} 次迭代，误差 {abs(x_a - x_star):.3e}")
+    print(f"  实际加速次数  : {acc.n_accelerated}")
+
+    # ------------------------------------------------------------------
+    # 算例 2：二维线性系统 x = A x + b
+    # 谱半径约 0.70，Picard 需要几十步；AA 通常几步就能压到机器精度。
+    # ------------------------------------------------------------------
+    A = np.array([[0.62, 0.18], [0.11, 0.47]], dtype=np.float64)
+    b = np.array([1.0, -0.5], dtype=np.float64)
+    x_star_vec = np.linalg.solve(np.eye(2) - A, b)
+
+    def g_linear(x: np.ndarray) -> np.ndarray:
+        return A @ x + b
+
+    def picard_vec(g, x0: np.ndarray, tol: float, max_iter: int):
+        x = x0.copy()
+        for k in range(1, max_iter + 1):
+            f = g(x)
+            if np.linalg.norm(f - x, ord=np.inf) < tol:
+                return k, x
+            x = f
+        return max_iter, x
+
+    def aa_vec(g, x0: np.ndarray, m: int, tol: float, max_iter: int):
+        acc = AndersonAccelerator(m)
+        x = x0.copy()
+        for k in range(1, max_iter + 1):
+            f = g(x)
+            if np.linalg.norm(f - x, ord=np.inf) < tol:
+                return k, x, acc
+            x = acc.accelerate(x, f)
+        return max_iter, x, acc
+
+    k_p2, x_p2 = picard_vec(g_linear, np.zeros(2), 1e-10, max_iter)
+    k_a2, x_a2, acc2 = aa_vec(g_linear, np.zeros(2), 3, 1e-10, max_iter)
+
+    print("\n[算例 2] 二维线性系统 x = A x + b")
+    print(f"  Picard        : {k_p2:3d} 次迭代，误差 {np.linalg.norm(x_p2 - x_star_vec, ord=np.inf):.3e}")
+    print(f"  Anderson(m=3) : {k_a2:3d} 次迭代，误差 {np.linalg.norm(x_a2 - x_star_vec, ord=np.inf):.3e}")
+    print(f"  实际加速次数  : {acc2.n_accelerated}")
+
+    # 自检断言：若 AA 没有减少迭代次数，说明实现或算例有问题。
+    assert k_a < k_p, "标量算例中 Anderson 未减少迭代次数"
+    assert k_a2 < k_p2, "二维算例中 Anderson 未减少迭代次数"
+    print("\n自检通过：Anderson 加速显著减少了 Picard 迭代次数。")
+
+
+if __name__ == "__main__":
+    _demo()

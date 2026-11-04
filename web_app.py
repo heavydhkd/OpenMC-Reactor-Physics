@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -26,7 +28,8 @@ import streamlit as st
 
 # ============================================================ 1. 主题
 
-NEON = "#00FF9C"   # 荧光绿：主数据曲线
+NEON = "#00FF9C"   # 荧光绿：Anderson 主数据曲线
+PICARD_GRAY = "#9AA6B8"  # 灰色：Picard 基线与散点
 CYAN = "#22D3EE"   # 科幻蓝：辅助线 / 标注
 VIOLET = "#A78BFA"
 PINK = "#FF3D9A"   # 告警
@@ -71,8 +74,32 @@ CSS = """
   }
   .chip b { color: #EAF6FF; font-family: "JetBrains Mono", Consolas, monospace; }
   .hint { font-size: .76rem; color: #6B7A8F; line-height: 1.5; }
+  /* st.metric 与上方自定义霓虹卡片保持同一套视觉语言 */
+  div[data-testid="stMetric"] {
+    position: relative; overflow: hidden;
+    padding: 14px 16px 12px; border-radius: 16px;
+    background: linear-gradient(160deg, rgba(12,20,34,.94), rgba(8,12,22,.94));
+    border: 1px solid rgba(34,211,238,.20);
+    box-shadow: 0 14px 38px -24px rgba(34,211,238,.55),
+                inset 0 0 48px -30px rgba(0,255,156,.50);
+  }
+  div[data-testid="stMetric"]::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: linear-gradient(90deg, transparent, #22D3EE, transparent);
+    opacity: .7;
+  }
+  div[data-testid="stMetricLabel"] p {
+    font-size: .74rem; letter-spacing: .10em; text-transform: uppercase; color: #8FA3B8;
+  }
+  div[data-testid="stMetricValue"] {
+    color: #EAF6FF; font-family: "JetBrains Mono", Consolas, monospace;
+    text-shadow: 0 0 18px rgba(34,211,238,.35);
+  }
 </style>
 """
+
+# 离线迭代历史固定相对脚本目录解析：不依赖当前工作目录，Windows / WSL 都成立。
+HISTORY_PATH = Path(__file__).resolve().parent / "iteration_history.json"
 
 # ============================================================ 2. 一维导热（自包含）
 
@@ -373,12 +400,192 @@ def plot(fig: go.Figure, target: Any = None) -> None:
     (target or st).plotly_chart(fig, config={"displayModeBar": False, **kwargs})
 
 
-# ============================================================ 7. 主界面
+# ============================================================ 7. 实测迭代对比（离线 JSON）
+#
+# 这里只读 coupled_pin.py 生成的 iteration_history.json，
+# 绝不在 Streamlit 里调用 OpenMC。
+
+
+def _load_iteration_history(path: Path = HISTORY_PATH) -> dict[str, Any]:
+    """读取 JSON；文件不存在 / 编码错误 / JSON 语法错误都交给调用方提示。"""
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON 顶层必须是对象")
+    return payload
+
+
+def _extract_series(block: Any, name: str) -> tuple[list[int], list[float]]:
+    """取出 iterations / temperatures 两条等长数组，并转成 Python 数值。"""
+    if not isinstance(block, dict):
+        raise ValueError(f"{name} 字段缺失或不是 JSON 对象")
+    xs, ys = block.get("iterations"), block.get("temperatures")
+    if not isinstance(xs, list) or not isinstance(ys, list):
+        raise ValueError(f"{name} 缺少 iterations / temperatures 数组")
+    if not xs or len(xs) != len(ys):
+        raise ValueError(f"{name} 的 iterations / temperatures 为空或长度不一致")
+    try:
+        xi = [int(x) for x in xs]
+        yf = [float(y) for y in ys]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 含非数值元素：{exc}") from exc
+    if not all(math.isfinite(v) for v in yf):
+        raise ValueError(f"{name}.temperatures 含 NaN / Infinity")
+    return xi, yf
+
+
+def _iteration_count(block: dict[str, Any], xs: list[int], name: str) -> int:
+    """优先用 JSON 里的 n_iterations；缺失时退回数组长度减一。"""
+    value = block.get("n_iterations", len(xs) - 1)
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name}.n_iterations 不是整数") from exc
+    if count < 0:
+        raise ValueError(f"{name}.n_iterations 不能为负数")
+    if count != len(xs) - 1:
+        raise ValueError(
+            f"{name}.n_iterations={count} 与 iterations 数组长度 {len(xs)} 不一致"
+        )
+    return count
+
+
+def history_comparison_figure(
+    xa: list[int], ya: list[float],
+    xp: list[int] | None = None, yp: list[float] | None = None,
+) -> go.Figure:
+    """Anderson 实线 + Picard 虚线，两条曲线都在每个数据点上画散点。"""
+    fig = go.Figure()
+
+    # Anderson 的霓虹外发光：两层半透明粗线，最后再叠主线和散点。
+    fig.add_trace(go.Scatter(
+        x=xa, y=ya, mode="lines", hoverinfo="skip", showlegend=False,
+        line=dict(color=NEON, width=10), opacity=0.07))
+    fig.add_trace(go.Scatter(
+        x=xa, y=ya, mode="lines", hoverinfo="skip", showlegend=False,
+        line=dict(color=NEON, width=5), opacity=0.13))
+
+    if xp is not None and yp is not None:
+        fig.add_trace(go.Scatter(
+            x=xp, y=yp, mode="lines+markers", name="Picard 基线",
+            line=dict(color=PICARD_GRAY, width=2.0, dash="dash"),
+            marker=dict(size=8, color=PICARD_GRAY,
+                        line=dict(color="#0B0F17", width=1)),
+            cliponaxis=False,
+            hovertemplate="Picard · 第 %{x} 步<br>燃料温度 %{y:.2f} K<extra></extra>"))
+
+    fig.add_trace(go.Scatter(
+        x=xa, y=ya, mode="lines+markers", name="Anderson 加速",
+        line=dict(color=NEON, width=3.0),
+        marker=dict(size=9, color=NEON,
+                    line=dict(color="#04120C", width=1.5)),
+        cliponaxis=False,
+        hovertemplate="Anderson · 第 %{x} 步<br>燃料温度 %{y:.2f} K<extra></extra>"))
+
+    all_x = xa + (xp or [])
+    all_y = ya + (yp or [])
+    pad = max(4.0, (max(all_y) - min(all_y)) * 0.08)
+
+    _dark_layout(
+        fig,
+        "燃料温度 · 迭代收敛轨迹　<span style='color:#6B7A8F'>"
+        "Anderson 荧光绿实线 / Picard 灰色虚线</span>",
+        height=440,
+    )
+    fig.update_layout(
+        showlegend=True,
+        margin=dict(l=10, r=10, t=54, b=42),
+        legend=dict(
+            orientation="h", x=0.99, y=0.02, xanchor="right", yanchor="bottom",
+            bgcolor="rgba(5,10,18,.55)", bordercolor="rgba(34,211,238,.18)",
+            borderwidth=1, font=dict(color=INK, size=11)),
+    )
+    fig.update_xaxes(
+        title="迭代次数",
+        dtick=1 if max(all_x) <= 12 else 2,
+        range=[min(all_x) - 0.35, max(all_x) + 0.35],
+    )
+    fig.update_yaxes(
+        title="燃料温度 / K",
+        range=[min(all_y) - pad, max(all_y) + pad],
+    )
+    return fig
+
+
+def render_history_comparison() -> None:
+    """页面顶部的离线对比区：3 个 st.metric + 1 张 Plotly 对比图。"""
+    st.markdown("### ⚡ Anderson vs Picard · 实测迭代对比")
+    st.caption("读取 `iteration_history.json` 的离线结果；本页不会实时调用 OpenMC。")
+
+    try:
+        payload = _load_iteration_history()
+    except FileNotFoundError:
+        st.warning(f"未找到 `{HISTORY_PATH}`。请先运行下面的命令生成它：")
+        st.code(f"cd {HISTORY_PATH.parent}\npython coupled_pin.py", language="bash")
+        return
+    except (OSError, ValueError) as exc:
+        st.error(f"读取 `{HISTORY_PATH}` 失败：{exc}")
+        return
+
+    try:
+        anderson_block = payload.get("anderson")
+        xa, ya = _extract_series(anderson_block, "anderson")
+        n_a = _iteration_count(anderson_block, xa, "anderson")
+
+        picard_block = payload.get("picard")
+        if picard_block:
+            xp, yp = _extract_series(picard_block, "picard")
+            n_p: int | None = _iteration_count(picard_block, xp, "picard")
+        else:
+            xp, yp, n_p = None, None, None
+    except ValueError as exc:
+        st.error(f"`{HISTORY_PATH.name}` 结构不完整：{exc}")
+        return
+
+    comparison = payload.get("comparison")
+    if not isinstance(comparison, dict):
+        comparison = {}
+    speedup = comparison.get("speedup_ratio")
+    if n_p is None or not isinstance(speedup, (int, float)) \
+            or not math.isfinite(float(speedup)) or speedup <= 0:
+        speedup = (n_p / n_a) if (n_p is not None and n_a > 0) else None
+
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        st.metric("Anderson 迭代步数", f"{n_a}",
+                  help="iteration_history.json → anderson.n_iterations")
+    with c2:
+        st.metric("Picard 迭代步数", f"{n_p}" if n_p is not None else "—",
+                  help="iteration_history.json → picard.n_iterations")
+    with c3:
+        st.metric("计算加速比", f"{speedup:.2f}x" if speedup else "—",
+                  help="Picard 步数 ÷ Anderson 步数，越大越好")
+
+    if n_p is None:
+        st.info("这份 JSON 只包含 Anderson 结果（Picard 基线未运行）。")
+
+    plot(history_comparison_figure(xa, ya, xp, yp))
+
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    st.caption(
+        f"数据源：`{HISTORY_PATH}` · 生成于 {meta.get('generated_at', '未知')}"
+        " · 第 0 点为初始温度"
+    )
+
+
+# ============================================================ 8. 主界面
 
 
 def main() -> None:
     st.set_page_config(page_title="反应堆物理-热工耦合仪表盘", page_icon="⚛", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
+
+    # 先展示 coupled_pin.py 生成的离线实测对比，再进入交互式代理模型区。
+    render_history_comparison()
+    st.divider()
+    st.markdown("### 🧪 交互式设计空间 · 实时代理模型")
 
     surrogate = get_surrogate()
 
@@ -420,7 +627,7 @@ def main() -> None:
         kpi("收敛温度 · 燃料平均", f"{result.history[-1]:.1f} K",
             f"中心 {field.t_center:.1f} K · 表面 {field.t_surface:.1f} K", NEON)
     with c3:
-        kpi("Picard 迭代", f"{result.iterations}",
+        kpi("本次交互 Picard 迭代", f"{result.iterations}",
             "已收敛" if result.converged else "达到迭代上限（可能振荡）",
             CYAN if result.converged else PINK)
     with c4:
