@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 # ============================================================ 1. 主题
 
@@ -33,6 +34,9 @@ PICARD_GRAY = "#9AA6B8"  # 灰色：Picard 基线与散点
 CYAN = "#22D3EE"   # 科幻蓝：辅助线 / 标注
 VIOLET = "#A78BFA"
 PINK = "#FF3D9A"   # 告警
+TRANSIENT_POWER = "#FF5A1F"   # 弹棒事故：荧光橙红，归一化功率
+TRANSIENT_FUEL = "#4DA3FF"    # 弹棒事故：蓝色，燃料温度
+TRANSIENT_COOLANT = "#00E5FF" # 弹棒事故：青色，冷却剂温度
 INK = "#C9D6E3"
 DIM = "#6B7A8F"
 MONO = '"JetBrains Mono", Consolas, "Microsoft YaHei", monospace'
@@ -98,8 +102,9 @@ CSS = """
 </style>
 """
 
-# 离线迭代历史固定相对脚本目录解析：不依赖当前工作目录，Windows / WSL 都成立。
+# 离线结果固定相对脚本目录解析：不依赖当前工作目录，Windows / WSL 都成立。
 HISTORY_PATH = Path(__file__).resolve().parent / "iteration_history.json"
+TRANSIENT_PATH = Path(__file__).resolve().parent / "transient_precise_results.json"
 
 # ============================================================ 2. 一维导热（自包含）
 
@@ -575,16 +580,177 @@ def render_history_comparison() -> None:
     )
 
 
-# ============================================================ 8. 主界面
+# ============================================================ 8. 瞬态事故分析（离线 JSON）
+#
+# 只读 transient_precise.py 生成的 JSON，绝不在 Streamlit 里调用 OpenMC。
 
 
-def main() -> None:
-    st.set_page_config(page_title="反应堆物理-热工耦合仪表盘", page_icon="⚛", layout="wide")
-    st.markdown(CSS, unsafe_allow_html=True)
+@st.cache_data(show_spinner=False)
+def _read_transient_json(path_str: str, mtime_ns: int) -> dict[str, Any]:
+    """带 mtime 的缓存读取：JSON 重新生成后 mtime 变化，缓存自动失效。"""
+    del mtime_ns  # 只参与缓存键，函数体不需要
+    path = Path(path_str)
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON 顶层必须是对象")
 
-    # 先展示 coupled_pin.py 生成的离线实测对比，再进入交互式代理模型区。
-    render_history_comparison()
-    st.divider()
+    series: dict[str, list[float]] = {}
+    for key in ("t", "n", "Tf", "Tm"):
+        values = payload.get(key)
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"缺少非空数组 `{key}`")
+        try:
+            series[key] = [float(v) for v in values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"`{key}` 含非数值元素：{exc}") from exc
+        if not all(math.isfinite(v) for v in series[key]):
+            raise ValueError(f"`{key}` 含 NaN / Infinity")
+
+    lengths = {len(values) for values in series.values()}
+    if len(lengths) != 1:
+        raise ValueError(f"t / n / Tf / Tm 长度不一致：{sorted(lengths)}")
+
+    payload.update(series)
+    return payload
+
+
+def load_transient_results(path: Path = TRANSIENT_PATH) -> dict[str, Any]:
+    """读取 JSON；把文件 mtime 一起交给缓存函数，重新生成后不会读到旧结果。"""
+    stat = path.stat()
+    return _read_transient_json(str(path), stat.st_mtime_ns)
+
+
+def transient_figure(t: Any, n: Any, tf: Any, tm: Any) -> go.Figure:
+    """双 Y 轴：左轴对数功率，右轴燃料/冷却剂温度。"""
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 功率主曲线：橙红荧光；再叠一层半透明粗线做外发光。
+    fig.add_trace(go.Scatter(
+        x=t, y=n, mode="lines", hoverinfo="skip", showlegend=False,
+        line=dict(color=TRANSIENT_POWER, width=8), opacity=0.10,
+    ), secondary_y=False)
+    fig.add_trace(go.Scatter(
+        x=t, y=n, mode="lines", name="归一化功率 n",
+        line=dict(color=TRANSIENT_POWER, width=3.0),
+        hovertemplate="t=%{x:.3f} s<br>n=%{y:.3f}<extra></extra>",
+    ), secondary_y=False)
+
+    fig.add_trace(go.Scatter(
+        x=t, y=tf, mode="lines", name="燃料温度 Tf",
+        line=dict(color=TRANSIENT_FUEL, width=2.2),
+        hovertemplate="t=%{x:.3f} s<br>Tf=%{y:.2f} K<extra></extra>",
+    ), secondary_y=True)
+    fig.add_trace(go.Scatter(
+        x=t, y=tm, mode="lines", name="冷却剂温度 Tm",
+        line=dict(color=TRANSIENT_COOLANT, width=2.2),
+        hovertemplate="t=%{x:.3f} s<br>Tm=%{y:.2f} K<extra></extra>",
+    ), secondary_y=True)
+
+    t_lo = min(float(np.min(tf)), float(np.min(tm)))
+    t_hi = max(float(np.max(tf)), float(np.max(tm)))
+    pad = max(4.0, (t_hi - t_lo) * 0.08)
+
+    _dark_layout(
+        fig,
+        "弹棒事故瞬态　<span style='color:#6B7A8F'>"
+        "0–10 s · 左轴对数功率 / 右轴温度</span>",
+        height=520,
+    )
+    fig.update_xaxes(title_text="时间 / s", range=[0.0, 10.0], dtick=1.0)
+    fig.update_yaxes(
+        title_text="归一化功率 n（对数）",
+        type="log",
+        exponentformat="power",
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text="温度 / K",
+        type="linear",
+        range=[t_lo - pad, t_hi + pad],
+        secondary_y=True,
+    )
+    fig.update_layout(
+        showlegend=True,
+        margin=dict(l=10, r=10, t=58, b=52),
+        legend=dict(
+            orientation="h", x=0.99, y=0.98, xanchor="right", yanchor="top",
+            bgcolor="rgba(5,10,18,.55)", bordercolor="rgba(34,211,238,.18)",
+            borderwidth=1, font=dict(color=INK, size=11)),
+    )
+    return fig
+
+
+def render_transient_tab() -> None:
+    st.markdown("### ⚠️ 瞬态安全分析：弹棒事故")
+    st.caption("读取 `transient_precise_results.json` 的离线结果；本页不会实时调用 OpenMC。")
+
+    try:
+        payload = load_transient_results()
+    except FileNotFoundError:
+        st.warning(f"未找到 `{TRANSIENT_PATH}`。请先运行：")
+        st.code(f"cd {TRANSIENT_PATH.parent}\npython transient_precise.py", language="bash")
+        return
+    except (OSError, ValueError) as exc:
+        st.error(f"读取 `{TRANSIENT_PATH}` 失败：{exc}")
+        return
+
+    t = np.asarray(payload["t"], dtype=float)
+    n = np.asarray(payload["n"], dtype=float)
+    tf = np.asarray(payload["Tf"], dtype=float)
+    tm = np.asarray(payload["Tm"], dtype=float)
+
+    window = t <= 10.0 + 1e-12
+    if not bool(np.any(window)):
+        st.error("JSON 中没有 0–10 s 范围内的数据点。")
+        return
+    t_win, n_win = t[window], n[window]
+    tf_win, tm_win = tf[window], tm[window]
+
+    i_peak = int(np.argmax(n_win))
+    peak_n = float(n_win[i_peak])
+    peak_tf = float(np.max(tf_win))
+
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    neutronics = meta.get("neutronics")
+    if not isinstance(neutronics, dict):
+        neutronics = {}
+    initial = meta.get("initial_conditions")
+    if not isinstance(initial, dict):
+        initial = {}
+    alpha_f = float(neutronics.get("alpha_f_per_K", -3e-5))
+    tf0 = float(initial.get("Tf0_K", 600.0))
+    doppler_pcm = alpha_f * (peak_tf - tf0) * 1e5
+
+    st.warning(
+        "警告：当前模拟为 +1500 pcm 弹棒事故（瞬发超临界）。"
+        "多普勒效应在 0.11s 内介入，成功抑制了功率尖峰。"
+    )
+
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        st.metric("峰值功率 n_max", f"{peak_n:.2f} ×",
+                  help="0–10 s 内归一化功率的最大值")
+    with c2:
+        st.metric("燃料峰值温度", f"{peak_tf:.2f} K",
+                  help="0–10 s 内燃料温度 Tf 的最大值")
+    with c3:
+        st.metric("反应性反馈", f"{doppler_pcm:.0f} pcm",
+                  help="峰值时刻多普勒反馈：alpha_f × (Tf_peak − Tf0)")
+
+    plot(transient_figure(t_win, n_win, tf_win, tm_win))
+    st.caption(
+        f"数据源：`{TRANSIENT_PATH.name}` · 0–10 s 共 {t_win.size} 点 · "
+        f"功率峰值 {peak_n:.2f}× @ {t_win[i_peak]:.3f} s"
+    )
+
+
+# ============================================================ 9. 主界面
+
+
+def render_steady_state_dashboard() -> None:
     st.markdown("### 🧪 交互式设计空间 · 实时代理模型")
 
     surrogate = get_surrogate()
@@ -658,6 +824,22 @@ def main() -> None:
     plot(scan_figure(surrogate, enrichment, boron, density, result.history[-1], result.k_eff))
 
     st.caption(f"单次耦合求解 {elapsed:.0f} ms · 滑块变动即重算 · 温度场由串联热阻模型给出")
+
+
+def main() -> None:
+    st.set_page_config(page_title="反应堆物理-热工耦合仪表盘", page_icon="⚛", layout="wide")
+    st.markdown(CSS, unsafe_allow_html=True)
+
+    tab_transient, tab_steady = st.tabs([
+        "⚠️ 瞬态安全分析：弹棒事故",
+        "🧪 稳态设计空间",
+    ])
+    with tab_transient:
+        render_transient_tab()
+    with tab_steady:
+        render_history_comparison()
+        st.divider()
+        render_steady_state_dashboard()
 
 
 if __name__ == "__main__":
