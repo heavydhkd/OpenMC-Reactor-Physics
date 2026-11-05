@@ -1,0 +1,24 @@
+# 项目运行依赖（Python 3.10+）
+# 由 src/ 下所有 .py 文件的 import 扫描生成；仅列第三方包，内置库未列入。
+
+# Web UI / 可视化
+streamlit>=1.30
+plotly>=5.18
+
+# 数值计算与数据处理
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+
+# 代理模型与机器学习
+scikit-learn>=1.2
+SALib>=1.4
+
+# 文件与绘图
+h5py>=3.8
+matplotlib>=3.7
+PyYAML>=6.0
+
+# OpenMC 通常需按官方文档从源码/Conda 安装；
+# 若当前平台没有 pip wheel，请先跳过此行、单独安装 OpenMC。
+openmc>=0.13.3

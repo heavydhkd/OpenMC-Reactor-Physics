@@ -58,7 +58,7 @@
 
 输出
 ----
-    默认写入脚本同目录的 transient_precise_results.json（UTF-8，原子替换）。
+    默认写入项目根 data/ 下的 transient_precise_results.json（UTF-8，原子替换）。
     JSON 顶层包含 meta、t、n、Tf、Tm、rho 六个字段，数组长度一致。
 """
 
@@ -127,8 +127,9 @@ DEFAULT_ATOL = 1.0e-12
 DEFAULT_MAX_STEP = 5.0e-3  # s
 DEFAULT_POINTS = 6001
 
-# 输出文件固定在脚本目录，避免依赖当前工作目录（WSL 下同样正确）。
-OUTPUT_PATH = Path(__file__).resolve().parent / "transient_precise_results.json"
+# 输出文件固定在项目根的 data/，避免依赖当前工作目录（WSL 下同样正确）。
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+OUTPUT_PATH = DATA_DIR / "transient_precise_results.json"
 
 # 状态向量下标，避免魔法数字
 IDX_N = 0
@@ -456,7 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=OUTPUT_PATH,
-        help="输出 JSON 路径，默认脚本同目录 transient_precise_results.json",
+        help="输出 JSON 路径，默认项目根 data/transient_precise_results.json",
     )
     parser.add_argument(
         "--rtol", type=float, default=DEFAULT_RTOL, help="相对误差，默认 1e-10"

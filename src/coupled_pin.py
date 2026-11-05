@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import openmc
@@ -126,11 +127,9 @@ ANDERSON_M = 3              # Anderson 记忆深度 m
 # 所以打开后总耗时约为只跑 Anderson 的 2 倍；只想看 Anderson 时改成 False。
 RUN_PICARD_BASELINE = True
 
-# JSON 固定写到脚本所在目录，避免从其他目录运行时写到意想不到的位置。
-HISTORY_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "iteration_history.json",
-)
+# JSON 固定写到项目根的 data/，避免依赖当前工作目录。
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+HISTORY_PATH = DATA_DIR / "iteration_history.json"
 
 
 def coupled_step(T_current):
@@ -321,6 +320,7 @@ def save_iteration_history(payload, path=HISTORY_PATH):
     """把结果写成 UTF-8 JSON；返回实际写入路径，方便日志打印。"""
     # 同时兼容 str 和 pathlib.Path，避免调用方传 Path 时字符串拼接失败。
     path = os.fspath(path)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     # 先写临时文件再原子替换，防止写到一半被 Ctrl+C 打断留下半个 JSON。
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
